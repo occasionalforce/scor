@@ -1,0 +1,1414 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>音ゲー譜面エディタ</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #121212;
+      color: #fff;
+      margin: 10px;
+      user-select: none;
+    }
+    .control-panel {
+      background: #222;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button, input {
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    input[type="range"] {
+      padding: 0;
+      cursor: pointer;
+      vertical-align: middle;
+    }
+    button:hover { background: #444; }
+    button.active-mode {
+      background: #0088cc !important;
+      border-color: #00aaff !important;
+      font-weight: bold;
+    }
+    button.playing-btn {
+      background: #cc3333 !important;
+      border-color: #ff5555 !important;
+    }
+    
+    .editor-container {
+      max-height: 75vh;
+      overflow-y: auto;
+      border: 1px solid #444;
+      background: #000;
+      position: relative;
+    }
+
+    .lane-row {
+      display: flex;
+      align-items: flex-start;
+      border-bottom: 2px solid #444;
+      background: #181818;
+    }
+    .lane-info {
+      width: 130px;
+      padding: 5px;
+      background: #1a1a1a;
+      border-right: 1px solid #444;
+      font-size: 11px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .play-lane-btn {
+      width: 100%;
+      background: #005588;
+      border: none;
+      color: white;
+    }
+    .preview-lane-btn {
+      width: 100%;
+      background: #885500;
+      border: none;
+      color: white;
+    }
+
+    .lane-content {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .measure-buttons {
+      display: flex;
+      background: #222;
+      border-bottom: 1px solid #333;
+    }
+    .clear-btn {
+      background: #3a2222;
+      border: 1px solid #553333;
+      color: #ff9999;
+      padding: 2px 0;
+      font-size: 10px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    .clear-btn.undo {
+      background: #223a22;
+      border-color: #335533;
+      color: #99ff99;
+    }
+
+    canvas {
+      display: block;
+      cursor: crosshair;
+    }
+
+    .save-area {
+      margin-top: 10px;
+      background: #222;
+      padding: 10px;
+    }
+    textarea {
+      width: 100%;
+      height: 80px;
+      background: #111;
+      color: #0f0;
+      border: 1px solid #444;
+    }
+    .status-msg {
+      color: #00e5ff;
+      font-weight: bold;
+      margin-left: 10px;
+    }
+
+    /* 譜面再現モーダル */
+    .preview-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    .preview-modal {
+      background: #181818;
+      border: 2px solid #666;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+      box-shadow: 0 0 30px rgba(0,0,0,0.8);
+      opacity: 1.0 !important;
+    }
+    .preview-header {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      align-items: center;
+    }
+    #previewCanvas {
+      background: #000;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+
+  <h3>音ゲー譜面エディタ (全128小節)</h3>
+
+  <div class="control-panel">
+    <button id="playAllBtn">▶ 全体再生</button>
+    <button id="stopBtn">⏹ 停止</button>
+    <label>BPM: <input type="number" id="bpmInput" value="120" style="width:50px;"></label>
+    
+    <span style="margin-left:10px;">グリッド:</span>
+    <button id="grid16Btn" class="active-mode">16分</button>
+    <button id="grid24Btn">24分</button>
+
+    <label style="margin-left:10px;">楽曲: <input type="file" id="audioFileInput" accept="audio/*"></label>
+    <label style="margin-left:10px;">オフセット(秒): <input type="number" id="offsetInput" value="0" step="0.01" style="width:60px;"></label>
+    
+    <span style="margin-left:10px; border-left:1px solid #555; padding-left:10px;">音量調整:</span>
+    <label>曲: <input type="range" id="bgmVolumeInput" min="0" max="1" step="0.01" value="0.8" style="width:70px;"></label>
+    <label>ノーツ: <input type="range" id="seVolumeInput" min="0" max="1" step="0.01" value="0.8" style="width:70px;"></label>
+
+    <span id="statusMsg" class="status-msg"></span>
+  </div>
+
+  <div class="editor-container" id="editorContainer"></div>
+
+  <div class="save-area">
+    <button id="saveJsonBtn">📄 データ保存 (JSON)</button>
+    <button id="loadJsonBtn">📂 データ読み込み</button>
+    <input type="file" id="fileInput" accept=".json" style="display:none;">
+    <textarea id="jsonOutput" readonly></textarea>
+  </div>
+
+  <!-- 譜面再現モーダル -->
+  <div class="preview-overlay" id="previewOverlay">
+    <div class="preview-modal" id="previewModal">
+      <div class="preview-header">
+        <div>
+          <label>ノーツ速度 (小節前): 
+            <input type="number" id="noteSpeedInput" value="0.25" step="0.05" min="0.05" max="2.0" style="width:60px;">
+          </label>
+        </div>
+        <div>
+          <button id="restartPreviewBtn" style="background:#228822; color:white; font-weight:bold; margin-right:10px;">最初から再生</button>
+          <button id="closePreviewBtn" style="background:#aa2222; color:white; font-weight:bold;">やめる (Esc)</button>
+        </div>
+      </div>
+      <canvas id="previewCanvas" width="450" height="450"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const NUM_LANES = 16;
+    const MEASURES_PER_LANE = 8;
+    const TOTAL_MEASURES = NUM_LANES * MEASURES_PER_LANE;
+    const ROWS = 8;
+
+    const INTERNAL_STEPS_PER_MEASURE = 48;
+    const TOTAL_INTERNAL_STEPS = TOTAL_MEASURES * INTERNAL_STEPS_PER_MEASURE;
+
+    let currentGridDiv = 16;
+    let stepsPerMeasure = 16; 
+
+    const CELL_H = 14;
+    const CANVAS_H = ROWS * CELL_H;
+    let cellW = 12; 
+    let NOTE_WIDTH = 12; 
+    let measureW = cellW * stepsPerMeasure;
+    let canvasW = measureW * MEASURES_PER_LANE;
+
+    // 0: 空白, 1: 赤ノーツ, 2: 青ノーツ, 3: 下書きノーツ(黄色)
+    const gridData = new Uint8Array(TOTAL_INTERNAL_STEPS * ROWS);
+    const clearHistory = {};
+
+    let isPlaying = false;
+    let playingLaneIndex = null;
+    let currentInternalStep = 0;
+    let animFrameId = null;
+
+    let audioCtx = null;
+    let audioBuffer = null;
+    let bgmSourceNode = null;
+    let bgmGainNode = null;
+    let playbackStartTime = 0;
+
+    let editMode = 'NONE';
+
+    let dragStartPos = null;
+    let dragCurrentPos = null;
+    let selectionBox = null;
+    let clipboardData = null; 
+    let hoverPastePos = null;
+
+    let isLeftClickPending = false; 
+    let isRightClickPending = false;
+
+    let isPreviewActive = false;
+    let previewLaneIdx = null;
+
+    function initAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function getAudioOffset() {
+      return parseFloat(document.getElementById('offsetInput').value) || 0;
+    }
+
+    function getSeVolume() {
+      return parseFloat(document.getElementById('seVolumeInput').value);
+    }
+
+    document.getElementById('bgmVolumeInput').addEventListener('input', (e) => {
+      if (bgmGainNode && audioCtx) {
+        bgmGainNode.gain.setValueAtTime(parseFloat(e.target.value), audioCtx.currentTime);
+      }
+    });
+
+    document.getElementById('offsetInput').addEventListener('input', () => {
+      updateJsonDisplay();
+    });
+
+    function playKick() {
+      if (!audioCtx) return;
+      const seVol = getSeVolume();
+      if (seVol <= 0) return;
+
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const now = audioCtx.currentTime;
+      osc.frequency.setValueAtTime(120, now);
+      osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.12);
+      gain.gain.setValueAtTime(1.5 * seVol, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.12);
+    }
+
+    function playHiHat() {
+      if (!audioCtx) return;
+      const seVol = getSeVolume();
+      if (seVol <= 0) return;
+
+      const now = audioCtx.currentTime;
+      const bufferSize = audioCtx.sampleRate * 0.05;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+      const whiteNoise = audioCtx.createBufferSource();
+      whiteNoise.buffer = buffer;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 7000;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.3 * seVol, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+      whiteNoise.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      whiteNoise.start(now);
+    }
+
+    function playClap() {
+      if (!audioCtx) return;
+      const seVol = getSeVolume();
+      if (seVol <= 0) return;
+
+      const now = audioCtx.currentTime;
+      const bufferSize = audioCtx.sampleRate * 0.06;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1200;
+      filter.Q.value = 1.2;
+
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.003 * seVol, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      noise.start(now);
+    }
+
+    const editorContainer = document.getElementById('editorContainer');
+    const canvases = [];
+    const lanePlayButtons = [];
+
+    function buildEditorUI() {
+      editorContainer.innerHTML = '';
+      canvases.length = 0;
+      lanePlayButtons.length = 0;
+
+      stepsPerMeasure = currentGridDiv;
+      cellW = (currentGridDiv === 16) ? 12 : 8;
+      NOTE_WIDTH = 12;
+      measureW = cellW * stepsPerMeasure;
+      canvasW = measureW * MEASURES_PER_LANE;
+
+      for (let l = 0; l < NUM_LANES; l++) {
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'lane-row';
+
+        const startM = l * MEASURES_PER_LANE + 1;
+        const endM = startM + MEASURES_PER_LANE - 1;
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'lane-info';
+        
+        const laneTitle = document.createElement('div');
+        laneTitle.innerHTML = `<b>レーン ${l+1}</b>`;
+        const measureText = document.createElement('div');
+        measureText.textContent = `小節: ${startM}~${endM}`;
+        
+        const playBtn = document.createElement('button');
+        playBtn.className = 'play-lane-btn';
+        playBtn.id = `lane-play-btn-${l}`;
+        playBtn.textContent = '▶ ここから再生';
+        playBtn.onclick = () => toggleLanePlayback(l);
+
+        const previewBtn = document.createElement('button');
+        previewBtn.className = 'preview-lane-btn';
+        previewBtn.textContent = '🎬 譜面再現';
+        previewBtn.onclick = () => togglePreviewMode(l);
+
+        infoDiv.appendChild(laneTitle);
+        infoDiv.appendChild(measureText);
+        infoDiv.appendChild(playBtn);
+        infoDiv.appendChild(previewBtn);
+        lanePlayButtons.push(playBtn);
+
+        const laneContent = document.createElement('div');
+        laneContent.className = 'lane-content';
+
+        const btnHeader = document.createElement('div');
+        btnHeader.className = 'measure-buttons';
+
+        for (let m = 0; m < MEASURES_PER_LANE; m++) {
+          const globalM = l * MEASURES_PER_LANE + m;
+          const btn = document.createElement('button');
+          btn.className = 'clear-btn';
+          if (clearHistory[globalM]) {
+            btn.classList.add('undo');
+            btn.textContent = 'やり直し';
+          } else {
+            btn.textContent = 'クリア';
+          }
+          btn.style.width = measureW + 'px';
+          btn.id = `clear-btn-${globalM}`;
+          btn.onclick = () => toggleClearMeasure(globalM);
+          btnHeader.appendChild(btn);
+        }
+
+        const cvs = document.createElement('canvas');
+        cvs.width = canvasW;
+        cvs.height = CANVAS_H;
+        cvs.dataset.lane = l;
+
+        cvs.addEventListener('mousedown', (e) => onCanvasMouseDown(e, l));
+        cvs.addEventListener('mousemove', (e) => onCanvasMouseMove(e, l));
+        cvs.addEventListener('mouseup', (e) => onCanvasMouseUp(e, l));
+        cvs.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        laneContent.appendChild(btnHeader);
+        laneContent.appendChild(cvs);
+
+        rowDiv.appendChild(infoDiv);
+        rowDiv.appendChild(laneContent);
+        editorContainer.appendChild(rowDiv);
+
+        canvases.push(cvs);
+      }
+      redrawAll();
+    }
+
+    function checkPasteValidity(baseTargetInternalStep, baseTargetRow) {
+      if (!clipboardData) return { isValid: false, outOfBounds: false };
+
+      let isValid = true;
+      let outOfBounds = false;
+
+      for (let n of clipboardData.notes) {
+        const destInternalStep = baseTargetInternalStep + n.relInternalStep;
+        const destRow = baseTargetRow + n.relRow;
+
+        if (destInternalStep < 0 || destInternalStep >= TOTAL_INTERNAL_STEPS || destRow < 0 || destRow >= ROWS) {
+          outOfBounds = true;
+          isValid = false;
+          break;
+        }
+
+        // 16分グリッド(3step刻み) または 24分グリッド(2step刻み) のどちらかに入っているか
+        if (destInternalStep % 3 !== 0 && destInternalStep % 2 !== 0) {
+          isValid = false;
+        }
+      }
+
+      return { isValid, outOfBounds };
+    }
+
+    function drawLane(laneIdx) {
+      const cvs = canvases[laneIdx];
+      if (!cvs) return;
+      const ctx = cvs.getContext('2d');
+      const laneStartMeasure = laneIdx * MEASURES_PER_LANE;
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvasW, CANVAS_H);
+
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      for (let r = 2; r < ROWS; r += 2) {
+        ctx.beginPath();
+        ctx.moveTo(0, r * CELL_H);
+        ctx.lineTo(canvasW, r * CELL_H);
+        ctx.stroke();
+      }
+
+      const totalDisplaySteps = MEASURES_PER_LANE * stepsPerMeasure;
+      const subDiv = (currentGridDiv === 16) ? 4 : 6;
+      for (let s = 0; s < totalDisplaySteps; s++) {
+        const x = s * cellW;
+        if (s % stepsPerMeasure === 0) ctx.strokeStyle = '#666';
+        else if (s % subDiv === 0) ctx.strokeStyle = '#333';
+        else ctx.strokeStyle = '#222';
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, CANVAS_H);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = '#555';
+      ctx.beginPath();
+      ctx.moveTo(0, 4 * CELL_H);
+      ctx.lineTo(canvasW, 4 * CELL_H);
+      ctx.stroke();
+
+      const startInternalStep = laneStartMeasure * INTERNAL_STEPS_PER_MEASURE;
+      const endInternalStep = startInternalStep + (MEASURES_PER_LANE * INTERNAL_STEPS_PER_MEASURE);
+
+      for (let iStep = startInternalStep; iStep < endInternalStep; iStep++) {
+        const globalDispStep = iStep / (INTERNAL_STEPS_PER_MEASURE / stepsPerMeasure);
+        const localDispStep = globalDispStep - (laneStartMeasure * stepsPerMeasure);
+        const x = localDispStep * cellW;
+
+        for (let r = 0; r < ROWS; r++) {
+          const val = gridData[iStep * ROWS + r];
+          if (val > 0) {
+            if (val === 3) {
+              // 下書きノーツ (不透明度30%の黄色)
+              ctx.globalAlpha = 0.3;
+              ctx.fillStyle = '#ffff00';
+              ctx.fillRect(x + 1, r * CELL_H + 1, NOTE_WIDTH - 2, CELL_H - 2);
+              ctx.globalAlpha = 1.0;
+            } else {
+              ctx.globalAlpha = 0.7;
+              ctx.fillStyle = (val === 1) ? '#ff3355' : '#0099ff';
+              ctx.fillRect(x + 1, r * CELL_H + 1, NOTE_WIDTH - 2, CELL_H - 2);
+              ctx.globalAlpha = 1.0;
+            }
+          }
+        }
+      }
+
+      if (selectionBox && isLaneInSelection(laneIdx)) {
+        const laneStartDispStep = laneIdx * MEASURES_PER_LANE * stepsPerMeasure;
+        const localMinStep = Math.max(0, selectionBox.minDispStep - laneStartDispStep);
+        const localMaxStep = Math.min(MEASURES_PER_LANE * stepsPerMeasure - 1, selectionBox.maxDispStep - laneStartDispStep);
+
+        if (localMinStep <= localMaxStep) {
+          const x = localMinStep * cellW;
+          const w = (localMaxStep - localMinStep + 1) * cellW;
+          const y = selectionBox.minRow * CELL_H;
+          const h = (selectionBox.maxRow - selectionBox.minRow + 1) * CELL_H;
+
+          if (editMode === 'CUT') {
+            ctx.fillStyle = 'rgba(180, 0, 255, 0.25)';
+            ctx.strokeStyle = '#cc00ff';
+          } else {
+            ctx.fillStyle = 'rgba(0, 180, 255, 0.25)';
+            ctx.strokeStyle = '#00ccff';
+          }
+          ctx.fillRect(x, y, w, h);
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, w, h);
+        }
+      }
+
+      if (editMode !== 'NONE' && clipboardData && hoverPastePos && hoverPastePos.lane === laneIdx) {
+        const startX = hoverPastePos.localStep * cellW;
+        const startY = hoverPastePos.row * CELL_H;
+
+        const baseTargetInternalStep = hoverPastePos.internalStep;
+        const baseTargetRow = hoverPastePos.row;
+        const { isValid } = checkPasteValidity(baseTargetInternalStep, baseTargetRow);
+
+        if (isValid) {
+          ctx.fillStyle = 'rgba(0, 255, 100, 0.25)';
+          ctx.strokeStyle = '#00ff66';
+        } else {
+          ctx.fillStyle = 'rgba(255, 0, 0, 0.35)';
+          ctx.strokeStyle = '#ff0000';
+        }
+
+        ctx.fillRect(startX, startY, clipboardData.widthDispSteps * cellW, clipboardData.heightRows * CELL_H);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(startX, startY, clipboardData.widthDispSteps * cellW, clipboardData.heightRows * CELL_H);
+      }
+
+      if (isPlaying && currentInternalStep >= 0) {
+        const stepRatio = INTERNAL_STEPS_PER_MEASURE / stepsPerMeasure;
+        const currentDispStep = Math.floor(currentInternalStep / stepRatio);
+        const laneStartDispStep = laneIdx * MEASURES_PER_LANE * stepsPerMeasure;
+        if (currentDispStep >= laneStartDispStep && currentDispStep < laneStartDispStep + MEASURES_PER_LANE * stepsPerMeasure) {
+          const localStep = currentDispStep - laneStartDispStep;
+          ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
+          ctx.fillRect(localStep * cellW, 0, cellW, CANVAS_H);
+        }
+      }
+    }
+
+    function redrawAll() {
+      for (let l = 0; l < NUM_LANES; l++) drawLane(l);
+    }
+
+    function isLaneInSelection(laneIdx) {
+      if (!selectionBox) return false;
+      const laneStartDispStep = laneIdx * MEASURES_PER_LANE * stepsPerMeasure;
+      const laneEndDispStep = laneStartDispStep + MEASURES_PER_LANE * stepsPerMeasure - 1;
+      return !(selectionBox.maxDispStep < laneStartDispStep || selectionBox.minDispStep > laneEndDispStep);
+    }
+
+    function getGridPos(e, laneIdx) {
+      const rect = canvases[laneIdx].getBoundingClientRect();
+      const localStep = Math.floor((e.clientX - rect.left) / cellW);
+      const row = Math.floor((e.clientY - rect.top) / CELL_H);
+      
+      const clampedLocalStep = Math.max(0, Math.min(localStep, MEASURES_PER_LANE * stepsPerMeasure - 1));
+      const clampedRow = Math.max(0, Math.min(row, ROWS - 1));
+      const globalDispStep = (laneIdx * MEASURES_PER_LANE * stepsPerMeasure) + clampedLocalStep;
+      
+      const stepRatio = INTERNAL_STEPS_PER_MEASURE / stepsPerMeasure;
+      const internalStep = Math.round(globalDispStep * stepRatio);
+
+      return { lane: laneIdx, localStep: clampedLocalStep, globalDispStep, internalStep, row: clampedRow };
+    }
+
+    function onCanvasMouseDown(e, laneIdx) {
+      initAudio();
+      const pos = getGridPos(e, laneIdx);
+
+      if (e.button === 2 && (editMode === 'CUT' || editMode === 'COPY')) {
+        cancelEditMode(true); 
+        return;
+      }
+
+      if (editMode !== 'NONE' && clipboardData && e.button === 0) {
+        executePaste(pos);
+        return;
+      }
+
+      if (editMode === 'CUT' && e.button === 0) {
+        cancelEditMode(true);
+        return;
+      }
+
+      if (e.button === 2) { 
+        isRightClickPending = true;
+        dragStartPos = pos;
+        dragCurrentPos = pos;
+      } else if (e.button === 0) { 
+        isLeftClickPending = true;
+        dragStartPos = pos;
+        dragCurrentPos = pos;
+      }
+    }
+
+    function onCanvasMouseMove(e, laneIdx) {
+      const pos = getGridPos(e, laneIdx);
+
+      if (editMode !== 'NONE' && clipboardData) {
+        hoverPastePos = pos;
+        redrawAll();
+        return;
+      }
+
+      if (dragStartPos) {
+        if (Math.abs(pos.globalDispStep - dragStartPos.globalDispStep) > 0 || Math.abs(pos.row - dragStartPos.row) > 0) {
+          if (isLeftClickPending && editMode === 'NONE') {
+            editMode = 'COPY';
+            isLeftClickPending = false;
+            document.getElementById('statusMsg').textContent = '【コピー選択中】範囲をドラッグしてください';
+          } else if (isRightClickPending && editMode === 'NONE') {
+            editMode = 'CUT';
+            isRightClickPending = false;
+            document.getElementById('statusMsg').textContent = '【切り取り選択中】範囲をドラッグしてください';
+          }
+        }
+
+        if (editMode === 'CUT' || editMode === 'COPY') {
+          dragCurrentPos = pos;
+          selectionBox = {
+            minDispStep: Math.min(dragStartPos.globalDispStep, dragCurrentPos.globalDispStep),
+            maxDispStep: Math.max(dragStartPos.globalDispStep, dragCurrentPos.globalDispStep),
+            minRow: Math.min(dragStartPos.row, dragCurrentPos.row),
+            maxRow: Math.max(dragStartPos.row, dragCurrentPos.row)
+          };
+          redrawAll();
+        }
+      }
+    }
+
+    function onCanvasMouseUp(e, laneIdx) {
+      const pos = getGridPos(e, laneIdx);
+
+      if (e.button === 0 && isLeftClickPending) {
+        isLeftClickPending = false;
+        dragStartPos = null;
+        toggleSingleNote(pos.internalStep, pos.row, laneIdx, false);
+        return;
+      }
+
+      if (e.button === 2 && isRightClickPending) {
+        isRightClickPending = false;
+        dragStartPos = null;
+        toggleSingleNote(pos.internalStep, pos.row, laneIdx, true);
+        return;
+      }
+
+      if (e.button === 2 && editMode === 'CUT' && selectionBox) {
+        executeCutOrCopy(true);
+        dragStartPos = null;
+        return;
+      }
+      if (e.button === 0 && editMode === 'COPY' && selectionBox) {
+        executeCutOrCopy(false);
+        dragStartPos = null;
+        return;
+      }
+      dragStartPos = null;
+    }
+
+    function executeCutOrCopy(isCut) {
+      if (!selectionBox) return;
+
+      const stepRatio = INTERNAL_STEPS_PER_MEASURE / stepsPerMeasure;
+      const minInternalStep = Math.round(selectionBox.minDispStep * stepRatio);
+      const maxInternalStep = Math.round((selectionBox.maxDispStep + 1) * stepRatio) - 1;
+
+      const notes = [];
+      const originalNotes = [];
+      const widthDispSteps = selectionBox.maxDispStep - selectionBox.minDispStep + 1;
+      const heightRows = selectionBox.maxRow - selectionBox.minRow + 1;
+
+      for (let iStep = minInternalStep; iStep <= maxInternalStep; iStep++) {
+        const relInternalStep = iStep - minInternalStep;
+
+        for (let r = selectionBox.minRow; r <= selectionBox.maxRow; r++) {
+          const idx = iStep * ROWS + r;
+          const val = gridData[idx];
+          // 通常ノーツ(1, 2)のみを移動/コピーの対象とし、下書きノーツ(3)は対象外
+          if (val === 1 || val === 2) {
+            notes.push({ relInternalStep, relRow: r - selectionBox.minRow, type: val });
+            originalNotes.push({ internalStep: iStep, row: r, type: val });
+            if (isCut) gridData[idx] = 0; 
+          }
+        }
+      }
+
+      clipboardData = { widthDispSteps, heightRows, notes, originalNotes, baseSourceMinInternalStep: minInternalStep };
+      selectionBox = null;
+
+      if (isCut) {
+        editMode = 'CUT';
+        document.getElementById('statusMsg').textContent = '【切り取り移動中】クリックで貼り付け（右クリックでキャンセル）';
+      } else {
+        editMode = 'COPY';
+        document.getElementById('statusMsg').textContent = '【コピー移動中】クリックで貼り付け（右クリックでキャンセル）';
+      }
+      redrawAll();
+      updateJsonDisplay();
+    }
+
+    function executePaste(targetPos) {
+      if (!clipboardData) return;
+
+      const baseTargetInternalStep = targetPos.internalStep;
+      const baseTargetRow = targetPos.row;
+
+      const { isValid } = checkPasteValidity(baseTargetInternalStep, baseTargetRow);
+      if (!isValid) return; 
+
+      const stepRatio = INTERNAL_STEPS_PER_MEASURE / stepsPerMeasure;
+
+      // 1. 空白部分（貼り付け先範囲内）の既存ノーツをグリッドに関係なくすべて消去（下書きノーツ含む）
+      for (let ds = 0; ds < clipboardData.widthDispSteps; ds++) {
+        const destDispStep = targetPos.globalDispStep + ds;
+        if (destDispStep >= TOTAL_MEASURES * stepsPerMeasure) break;
+        
+        const startStep = Math.round(destDispStep * stepRatio);
+        const endStep = Math.round((destDispStep + 1) * stepRatio);
+
+        for (let iStep = startStep; iStep < endStep; iStep++) {
+          if (iStep >= TOTAL_INTERNAL_STEPS) break;
+          for (let r = 0; r < clipboardData.heightRows; r++) {
+            const destRow = baseTargetRow + r;
+            if (destRow >= ROWS) break;
+            gridData[iStep * ROWS + destRow] = 0;
+          }
+        }
+      }
+
+      // 2. 移動対象ノーツの配置（移動後のゾーンに応じて色/タイプを自動更新）
+      clipboardData.notes.forEach(n => {
+        const destInternalStep = baseTargetInternalStep + n.relInternalStep;
+        const destRow = baseTargetRow + n.relRow;
+
+        if (destInternalStep < TOTAL_INTERNAL_STEPS && destRow < ROWS) {
+          // 移動後の場所が赤色ゾーン(0~3)なら赤(1)、青色ゾーン(4~7)なら青(2)に変更
+          const updatedType = (destRow < 4) ? 1 : 2;
+          gridData[destInternalStep * ROWS + destRow] = updatedType;
+          
+          const mIdx = Math.floor(destInternalStep / INTERNAL_STEPS_PER_MEASURE);
+          resetUndoButtonForMeasure(mIdx);
+        }
+      });
+
+      cancelEditMode(false); 
+      updateJsonDisplay();
+    }
+
+    function cancelEditMode(isCancelFromPasteWait = false) {
+      if (isCancelFromPasteWait && editMode === 'CUT' && clipboardData && clipboardData.originalNotes) {
+        clipboardData.originalNotes.forEach(n => {
+          gridData[n.internalStep * ROWS + n.row] = n.type;
+        });
+      }
+
+      editMode = 'NONE';
+      selectionBox = null;
+      clipboardData = null;
+      hoverPastePos = null;
+      dragStartPos = null;
+      isLeftClickPending = false;
+      isRightClickPending = false;
+      document.getElementById('statusMsg').textContent = '';
+      redrawAll();
+    }
+
+    function toggleSingleNote(internalStep, row, laneIdx, isRightClick = false) {
+      const dataIdx = internalStep * ROWS + row;
+      const measureIdx = Math.floor(internalStep / INTERNAL_STEPS_PER_MEASURE);
+      const currentVal = gridData[dataIdx];
+
+      if (isRightClick) {
+        // 右クリック操作
+        if (currentVal > 0) {
+          // 既にノーツ(通常・下書き問わず)がある場合は削除
+          gridData[dataIdx] = 0;
+        } else {
+          // 空白の場合は下書きノーツ(3)を配置
+          gridData[dataIdx] = 3;
+        }
+      } else {
+        // 左クリック操作
+        if (currentVal > 0) {
+          // 既にノーツ(通常・下書き問わず)がある場合は削除
+          gridData[dataIdx] = 0;
+        } else {
+          // 空白の場合は通常ノーツを配置
+          const type = (row < 4) ? 1 : 2;
+          gridData[dataIdx] = type;
+          if (type === 1) playKick(); else playHiHat();
+          resetUndoButtonForMeasure(measureIdx);
+        }
+      }
+      drawLane(laneIdx);
+      updateJsonDisplay();
+    }
+
+    function resetUndoButtonForMeasure(measureIdx) {
+      const btn = document.getElementById(`clear-btn-${measureIdx}`);
+      if (btn && btn.classList.contains('undo')) {
+        btn.classList.remove('undo');
+        btn.textContent = 'クリア';
+        delete clearHistory[measureIdx];
+      }
+    }
+
+    document.getElementById('grid16Btn').addEventListener('click', () => setGridMode(16));
+    document.getElementById('grid24Btn').addEventListener('click', () => setGridMode(24));
+
+    function setGridMode(div) {
+      if (currentGridDiv === div) return;
+      currentGridDiv = div;
+      document.getElementById('grid16Btn').classList.toggle('active-mode', div === 16);
+      document.getElementById('grid24Btn').classList.toggle('active-mode', div === 24);
+      buildEditorUI();
+    }
+
+    function updatePlayButtonStates() {
+      for (let l = 0; l < NUM_LANES; l++) {
+        const btn = lanePlayButtons[l];
+        if (isPlaying && playingLaneIndex === l) {
+          btn.textContent = '⏹ 停止';
+          btn.classList.add('playing-btn');
+        } else {
+          btn.textContent = '▶ ここから再生';
+          btn.classList.remove('playing-btn');
+        }
+      }
+    }
+
+    function toggleLanePlayback(laneIdx) {
+      if (isPlaying && playingLaneIndex === laneIdx && !isPreviewActive) {
+        stopPlayback();
+      } else {
+        playFromMeasure(laneIdx * MEASURES_PER_LANE, laneIdx);
+      }
+    }
+
+    function playFromMeasure(measureIdx, laneIdx = null, isPreview = false) {
+      stopPlayback();
+      initAudio();
+
+      const bpm = parseInt(document.getElementById('bpmInput').value) || 120;
+      const secondsPerInternalStep = (60 / bpm) / 12;
+
+      let startInternalStep;
+      if (isPreview) {
+        startInternalStep = measureIdx * INTERNAL_STEPS_PER_MEASURE - INTERNAL_STEPS_PER_MEASURE;
+      } else {
+        startInternalStep = measureIdx * INTERNAL_STEPS_PER_MEASURE;
+      }
+      
+      currentInternalStep = startInternalStep;
+      isPlaying = true;
+      playingLaneIndex = laneIdx;
+
+      updatePlayButtonStates();
+
+      const offsetSec = getAudioOffset();
+
+      // オフセットは「楽曲データの再生タイミング」を操作する（譜面の再生開始位置は操作しない）
+      // 譜面上の基準時間 chartTime
+      const chartTimeAtStart = measureIdx * INTERNAL_STEPS_PER_MEASURE * secondsPerInternalStep;
+      // 楽曲データの再生開始位置 = (選択位置の譜面時間) + (オフセット秒数)
+      const songTimeAtStart = chartTimeAtStart + offsetSec;
+
+      if (isPreview) {
+        // 譜面再現時のカウントダウン分(1小節手前)の再生処理
+        const countChartTime = startInternalStep * secondsPerInternalStep;
+        const countSongTime = countChartTime + offsetSec;
+        playbackStartTime = audioCtx.currentTime + 0.05 - countChartTime;
+
+        if (audioBuffer) {
+          bgmSourceNode = audioCtx.createBufferSource();
+          bgmSourceNode.buffer = audioBuffer;
+          bgmGainNode = audioCtx.createGain();
+          bgmGainNode.gain.value = parseFloat(document.getElementById('bgmVolumeInput').value);
+          bgmSourceNode.connect(bgmGainNode);
+          bgmGainNode.connect(audioCtx.destination);
+
+          if (countSongTime >= 0) {
+            if (countSongTime < audioBuffer.duration) {
+              bgmSourceNode.start(audioCtx.currentTime + 0.05, countSongTime);
+            }
+          } else {
+            bgmSourceNode.start(audioCtx.currentTime + 0.05 + Math.abs(countSongTime), 0);
+          }
+        }
+      } else {
+        const startDelay = 0.05;
+        const now = audioCtx.currentTime;
+        const startTime = now + startDelay;
+
+        if (audioBuffer) {
+          bgmSourceNode = audioCtx.createBufferSource();
+          bgmSourceNode.buffer = audioBuffer;
+          
+          bgmGainNode = audioCtx.createGain();
+          bgmGainNode.gain.value = parseFloat(document.getElementById('bgmVolumeInput').value);
+
+          bgmSourceNode.connect(bgmGainNode);
+          bgmGainNode.connect(audioCtx.destination);
+
+          if (songTimeAtStart >= 0) {
+            if (songTimeAtStart < audioBuffer.duration) {
+              bgmSourceNode.start(startTime, songTimeAtStart);
+            }
+          } else {
+            bgmSourceNode.start(startTime + Math.abs(songTimeAtStart), 0);
+          }
+        }
+
+        playbackStartTime = startTime - chartTimeAtStart;
+      }
+
+      runStepLoop();
+    }
+
+    function stopPlayback() {
+      isPlaying = false;
+      playingLaneIndex = null;
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+      if (bgmSourceNode) {
+        try { bgmSourceNode.stop(); } catch(e){}
+        bgmSourceNode.disconnect();
+        bgmSourceNode = null;
+      }
+
+      updatePlayButtonStates();
+      redrawAll();
+    }
+
+    function playNotesAtStep(step) {
+      if (step < 0 || step >= TOTAL_INTERNAL_STEPS) return;
+      let hasRed = false, hasBlue = false;
+      for (let r = 0; r < ROWS; r++) {
+        const val = gridData[step * ROWS + r];
+        // 下書きノーツ(3)は音を鳴らさない
+        if (val === 1) hasRed = true;
+        if (val === 2) hasBlue = true;
+      }
+      if (hasRed) playKick();
+      if (hasBlue) playHiHat();
+    }
+
+    function runStepLoop() {
+      if (!isPlaying) return;
+
+      const bpm = parseInt(document.getElementById('bpmInput').value) || 120;
+      const secondsPerInternalStep = (60 / bpm) / 12;
+
+      const elapsedChartTime = audioCtx.currentTime - playbackStartTime;
+      const targetStep = Math.floor(elapsedChartTime / secondsPerInternalStep);
+
+      while (currentInternalStep <= targetStep && currentInternalStep < TOTAL_INTERNAL_STEPS) {
+        if (isPreviewActive) {
+          const laneStartInternalStep = previewLaneIdx * MEASURES_PER_LANE * INTERNAL_STEPS_PER_MEASURE;
+          if (currentInternalStep < laneStartInternalStep) {
+            const diff = currentInternalStep - (laneStartInternalStep - INTERNAL_STEPS_PER_MEASURE);
+            if (diff >= 0 && diff % 12 === 0) {
+              playClap();
+            }
+          } else {
+            playNotesAtStep(currentInternalStep);
+          }
+        } else {
+          playNotesAtStep(currentInternalStep);
+        }
+        currentInternalStep++;
+      }
+
+      if (isPreviewActive) {
+        drawPreviewFrame();
+      } else {
+        redrawAll();
+      }
+
+      if (currentInternalStep >= TOTAL_INTERNAL_STEPS) {
+        if (isPreviewActive) closePreviewMode(); else stopPlayback();
+        return;
+      }
+
+      animFrameId = requestAnimationFrame(runStepLoop);
+    }
+
+    const previewOverlay = document.getElementById('previewOverlay');
+    const previewCanvas = document.getElementById('previewCanvas');
+    const pCtx = previewCanvas.getContext('2d');
+
+    previewOverlay.addEventListener('click', (e) => {
+      if (e.target === previewOverlay) {
+        closePreviewMode();
+      }
+    });
+
+    function togglePreviewMode(laneIdx) {
+      if (isPreviewActive && previewLaneIdx === laneIdx) {
+        closePreviewMode();
+      } else {
+        openPreviewMode(laneIdx);
+      }
+    }
+
+    function openPreviewMode(laneIdx) {
+      isPreviewActive = true;
+      previewLaneIdx = laneIdx;
+      previewOverlay.style.display = 'flex';
+      playFromMeasure(laneIdx * MEASURES_PER_LANE, laneIdx, true);
+    }
+
+    function closePreviewMode() {
+      isPreviewActive = false;
+      previewLaneIdx = null;
+      previewOverlay.style.display = 'none';
+      stopPlayback();
+    }
+
+    document.getElementById('restartPreviewBtn').addEventListener('click', () => {
+      if (previewLaneIdx !== null) {
+        playFromMeasure(previewLaneIdx * MEASURES_PER_LANE, previewLaneIdx, true);
+      }
+    });
+
+    document.getElementById('closePreviewBtn').addEventListener('click', closePreviewMode);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isPreviewActive) closePreviewMode();
+    });
+
+    function drawPreviewFrame() {
+      const W = previewCanvas.width;
+      const H = previewCanvas.height;
+      const center = W / 2;
+      const radius = 170;
+
+      pCtx.fillStyle = '#050505';
+      pCtx.fillRect(0, 0, W, H);
+
+      pCtx.strokeStyle = '#888';
+      pCtx.lineWidth = 2;
+      pCtx.beginPath();
+      pCtx.arc(center, center, radius, 0, Math.PI * 2);
+      pCtx.stroke();
+
+      pCtx.strokeStyle = '#444';
+      pCtx.lineWidth = 1;
+      pCtx.beginPath();
+      const cos45 = Math.cos(Math.PI / 4) * radius;
+      const sin45 = Math.sin(Math.PI / 4) * radius;
+      pCtx.moveTo(center - cos45, center - sin45);
+      pCtx.lineTo(center + cos45, center + sin45);
+      pCtx.moveTo(center + cos45, center - sin45);
+      pCtx.lineTo(center - cos45, center + sin45);
+      pCtx.stroke();
+
+      const noteSpeedMeasures = parseFloat(document.getElementById('noteSpeedInput').value) || 0.25;
+      const noteSpeedInternalSteps = noteSpeedMeasures * INTERNAL_STEPS_PER_MEASURE;
+
+      const quarterStepInterval = INTERNAL_STEPS_PER_MEASURE / 4;
+      const countStartStep = (previewLaneIdx * MEASURES_PER_LANE - 1) * INTERNAL_STEPS_PER_MEASURE;
+      const endStep = currentInternalStep + Math.ceil(noteSpeedInternalSteps);
+
+      pCtx.strokeStyle = 'rgba(255, 255, 0, 0.5)';
+      pCtx.lineWidth = 1.5;
+
+      const firstBeatStep = Math.ceil(currentInternalStep / quarterStepInterval) * quarterStepInterval;
+      for (let step = firstBeatStep; step < endStep; step += quarterStepInterval) {
+        if (step < countStartStep || step >= TOTAL_INTERNAL_STEPS) continue;
+        const timeDiff = step - currentInternalStep;
+        if (timeDiff >= 0 && timeDiff <= noteSpeedInternalSteps) {
+          const progress = 1.0 - (timeDiff / noteSpeedInternalSteps);
+          const offset = radius * progress;
+          if (offset > 0) {
+            pCtx.beginPath();
+            pCtx.arc(center, center, offset, 0, Math.PI * 2);
+            pCtx.stroke();
+          }
+        }
+      }
+
+      const validStartStep = Math.max(0, currentInternalStep);
+      const validEndStep = Math.min(TOTAL_INTERNAL_STEPS, endStep);
+
+      for (let step = validStartStep; step < validEndStep; step++) {
+        const timeDiff = step - currentInternalStep;
+
+        if (timeDiff >= 0 && timeDiff <= noteSpeedInternalSteps) {
+          const progress = 1.0 - (timeDiff / noteSpeedInternalSteps);
+
+          let noteCount = 0;
+          for (let r = 0; r < ROWS; r++) {
+            const val = gridData[step * ROWS + r];
+            // 下書きノーツ(3)はカウント・描画しない
+            if (val === 1 || val === 2) noteCount++;
+          }
+          const isSimultaneous = noteCount >= 2;
+
+          for (let r = 0; r < ROWS; r++) {
+            const val = gridData[step * ROWS + r];
+            if (val === 1 || val === 2) {
+              drawArcNote(r, progress, isSimultaneous);
+            }
+          }
+        }
+      }
+    }
+
+    function drawArcNote(row, progress, isSimultaneous) {
+      const center = previewCanvas.width / 2;
+      const maxRadius = 170;
+      const isRed = row < 4;
+      const dirIndex = row % 4; 
+
+      const offset = maxRadius * progress;
+      if (offset <= 0) return;
+
+      let baseStartAngle, baseEndAngle;
+      switch (dirIndex) {
+        case 0:
+          baseStartAngle = -Math.PI * 3/4;
+          baseEndAngle = -Math.PI / 4;
+          break;
+        case 1:
+          baseStartAngle = -Math.PI / 4;
+          baseEndAngle = Math.PI / 4;
+          break;
+        case 2:
+          baseStartAngle = Math.PI * 3/4;
+          baseEndAngle = Math.PI * 5/4;
+          break;
+        case 3:
+          baseStartAngle = Math.PI / 4;
+          baseEndAngle = Math.PI * 3/4;
+          break;
+      }
+
+      const fullSpan = baseEndAngle - baseStartAngle;
+      const aStart = baseStartAngle + fullSpan * 0.05;
+      const aEnd = baseEndAngle - fullSpan * 0.05;
+      const span = aEnd - aStart;
+
+      const mainColor = isRed ? '#ff3355' : '#0099ff';
+      const greenColor = '#00ff66';
+
+      const t1 = aStart + span * 0.10;
+      const t2 = aStart + span * 0.35;
+      const t3 = aStart + span * 0.65;
+      const t4 = aStart + span * 0.90;
+
+      const mainWidth = 3.6;
+      const centerWidth = 7.2;
+      const greenWidth = 6.0;
+
+      if (isSimultaneous) {
+        pCtx.lineWidth = greenWidth;
+        pCtx.strokeStyle = greenColor;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, aStart, t1);
+        pCtx.stroke();
+
+        pCtx.lineWidth = mainWidth;
+        pCtx.strokeStyle = mainColor;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t1, t2);
+        pCtx.stroke();
+
+        pCtx.lineWidth = centerWidth;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t2, t3);
+        pCtx.stroke();
+
+        pCtx.lineWidth = mainWidth;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t3, t4);
+        pCtx.stroke();
+
+        pCtx.lineWidth = greenWidth;
+        pCtx.strokeStyle = greenColor;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t4, aEnd);
+        pCtx.stroke();
+      } else {
+        pCtx.lineWidth = mainWidth;
+        pCtx.strokeStyle = mainColor;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, aStart, t2);
+        pCtx.stroke();
+
+        pCtx.lineWidth = centerWidth;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t2, t3);
+        pCtx.stroke();
+
+        pCtx.lineWidth = mainWidth;
+        pCtx.strokeStyle = mainColor;
+        pCtx.beginPath();
+        pCtx.arc(center, center, offset, t3, aEnd);
+        pCtx.stroke();
+      }
+    }
+
+    function toggleClearMeasure(measureIdx) {
+      const startInternalStep = measureIdx * INTERNAL_STEPS_PER_MEASURE;
+      const btn = document.getElementById(`clear-btn-${measureIdx}`);
+
+      if (btn.classList.contains('undo')) {
+        const savedNotes = clearHistory[measureIdx] || [];
+        savedNotes.forEach(n => {
+          gridData[n.internalStep * ROWS + n.row] = n.type;
+        });
+        delete clearHistory[measureIdx];
+        btn.classList.remove('undo');
+        btn.textContent = 'クリア';
+      } else {
+        const currentNotes = [];
+        for (let s = 0; s < INTERNAL_STEPS_PER_MEASURE; s++) {
+          const iStep = startInternalStep + s;
+          for (let r = 0; r < ROWS; r++) {
+            const val = gridData[iStep * ROWS + r];
+            if (val > 0) {
+              currentNotes.push({ internalStep: iStep, row: r, type: val });
+              gridData[iStep * ROWS + r] = 0;
+            }
+          }
+        }
+        clearHistory[measureIdx] = currentNotes;
+        btn.classList.add('undo');
+        btn.textContent = 'やり直し';
+      }
+
+      const laneIdx = Math.floor(measureIdx / MEASURES_PER_LANE);
+      drawLane(laneIdx);
+      updateJsonDisplay();
+    }
+
+    document.getElementById('playAllBtn').addEventListener('click', () => {
+      if (isPlaying && playingLaneIndex === null && !isPreviewActive) {
+        stopPlayback();
+      } else {
+        playFromMeasure(0, null);
+      }
+    });
+
+    document.getElementById('stopBtn').addEventListener('click', () => {
+      if (isPreviewActive) closePreviewMode();
+      else stopPlayback();
+    });
+
+    function updateJsonDisplay() {
+      const activeNotes = [];
+      for (let iStep = 0; iStep < TOTAL_INTERNAL_STEPS; iStep++) {
+        for (let r = 0; r < ROWS; r++) {
+          const val = gridData[iStep * ROWS + r];
+          if (val > 0) {
+            activeNotes.push({ step: iStep, internalStep: iStep, row: r, type: val });
+          }
+        }
+      }
+      const data = {
+        bpm: parseInt(document.getElementById('bpmInput').value) || 120,
+        offset: getAudioOffset(),
+        notes: activeNotes
+      };
+      document.getElementById('jsonOutput').value = JSON.stringify(data);
+    }
+
+    document.getElementById('saveJsonBtn').addEventListener('click', () => {
+      updateJsonDisplay();
+      const text = document.getElementById('jsonOutput').value;
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chart_data.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('loadJsonBtn').addEventListener('click', () => {
+      document.getElementById('fileInput').click();
+    });
+
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = JSON.parse(event.target.result);
+          if (data.bpm) document.getElementById('bpmInput').value = data.bpm;
+          if (data.offset !== undefined) document.getElementById('offsetInput').value = data.offset;
+
+          gridData.fill(0);
+          for (let key in clearHistory) delete clearHistory[key];
+
+          if (Array.isArray(data.notes)) {
+            const hasInternalStep = data.notes.some(n => n.internalStep !== undefined);
+            
+            let isOld16Step = false;
+            if (!hasInternalStep) {
+              const maxStep = Math.max(...data.notes.map(n => n.step || 0));
+              if (maxStep <= TOTAL_MEASURES * 16) {
+                isOld16Step = true;
+              }
+            }
+
+            data.notes.forEach(n => {
+              let targetStep = 0;
+              if (n.internalStep !== undefined) {
+                targetStep = n.internalStep;
+              } else if (n.step !== undefined) {
+                targetStep = isOld16Step ? n.step * 3 : n.step;
+              }
+
+              if (targetStep < TOTAL_INTERNAL_STEPS && n.row < ROWS) {
+                gridData[targetStep * ROWS + n.row] = n.type;
+              }
+            });
+          }
+          
+          buildEditorUI();
+          updateJsonDisplay();
+          document.getElementById('statusMsg').textContent = '読み込みが完了しました';
+        } catch (err) {
+          alert('JSONファイルの読み込みエラー: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    document.getElementById('audioFileInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      initAudio();
+      document.getElementById('statusMsg').textContent = '楽曲データ読み込み中...';
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        document.getElementById('statusMsg').textContent = '楽曲データ読み込み完了';
+      } catch (err) {
+        document.getElementById('statusMsg').textContent = '楽曲読み込みエラー';
+        console.error(err);
+      }
+    });
+
+    buildEditorUI();
+    updateJsonDisplay();
+  </script>
+</body>
+</html>
